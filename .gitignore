@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+venv/
+backend/venv/
+.venv/
+env/
+
+# Build outputs
+dist/
+frontend/dist/
+dist-ssr/
+*.local
+
+# Python cache
+__pycache__/
+backend/__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated static files / audio cache
+backend/static/audio/*.mp3
+backend/static/audio/*.wav
+
+# Environment variables & secrets
+.env
+backend/.env
+frontend/.env
+*.env
+!.env.example
+!backend/.env.example
+
+# OS & Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Personal ChatGPT export dumps
+f00cf60d9e843dab6c2cf7dfac841f7bc02d139390f1f2bfa3ac9c71a4ed5233*
