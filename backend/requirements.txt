@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+edge-tts
+python-multipart
+python-dotenv
+requests
