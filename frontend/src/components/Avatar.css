@@ -1,0 +1,133 @@
+/* ── Avatar container ── */
+.avatar-wrapper {
+  position: relative;
+  width: 420px;
+  height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.avatar-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 24px;
+  position: relative;
+  z-index: 2;
+}
+
+/* ── Glow ring — pulses when speaking ── */
+.avatar-glow-ring {
+  position: absolute;
+  inset: -12px;
+  border-radius: 32px;
+  border: 2px solid var(--border-color);
+  box-shadow: 0 0 20px rgba(0, 242, 254, 0.05);
+  z-index: 1;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.avatar-glow-ring.speaking {
+  border-color: var(--primary-glow);
+  box-shadow:
+    0 0 24px var(--primary-glow),
+    0 0 60px rgba(0, 242, 254, 0.1),
+    inset 0 0 30px rgba(0, 242, 254, 0.02);
+  animation: glow-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes glow-pulse {
+  0%, 100% { 
+    box-shadow: 
+      0 0 24px var(--primary-glow), 
+      0 0 60px rgba(0, 242, 254, 0.1); 
+  }
+  50% { 
+    box-shadow: 
+      0 0 36px var(--primary-glow), 
+      0 0 90px rgba(0, 242, 254, 0.2); 
+  }
+}
+
+/* ── Loading spinner ── */
+.avatar-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  z-index: 3;
+  color: var(--primary-glow);
+  font-size: 13px;
+}
+
+.avatar-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  border-top-color: var(--primary-glow);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Status badge ── */
+.avatar-status {
+  position: absolute;
+  bottom: -36px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 20px;
+  background: rgba(13, 27, 42, 0.85);
+  border: 0.5px solid var(--border-color);
+  font-size: 12px;
+  color: rgba(255,255,255,0.6);
+  white-space: nowrap;
+  z-index: 4;
+  transition: all 0.3s ease;
+}
+
+.avatar-status.speaking {
+  color: var(--primary-glow);
+  border-color: var(--primary-glow);
+}
+
+.avatar-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-color);
+  transition: all 0.3s;
+}
+
+.avatar-status.speaking .avatar-status-dot {
+  background: var(--primary-glow);
+  box-shadow: 0 0 6px var(--primary-glow);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%       { transform: scale(1.4); opacity: 0.7; }
+}
+
+/* ── Fallback avatar ── */
+.fallback-avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
