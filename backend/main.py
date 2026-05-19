@@ -1,56 +1,121 @@
+import json
 import os
 import requests
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header, UploadFile, File, Form
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Header, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
 from dotenv import load_dotenv
 
 from memory_manager import MemoryManager
 from tts_manager import TTSManager
 
-# Load env variables from .env if present
+# Load environment variables
 load_dotenv()
 
-app = FastAPI(title="AI Companion Chatbot Backend")
+app = FastAPI(
+    title="Shristy — AI Companion Chatbot Backend",
+    description="High-performance backend featuring Groq LLM inference, continuous memory engine, and Edge-TTS synthesis.",
+    version="1.1.0"
+)
 
-# Setup CORS for frontend connection
+# -----------------------------------------------------------------------------
+# Security & Configuration
+# -----------------------------------------------------------------------------
+ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY", "")
+SERVER_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# In public deployments, set ALLOW_CLIENT_API_KEY=false to prevent arbitrary client key usage
+ALLOW_CLIENT_API_KEY = os.environ.get("ALLOW_CLIENT_API_KEY", "true").lower() in ("true", "1", "yes")
+
+def resolve_groq_api_key(client_key: Optional[str] = None) -> str:
+    """
+    Resolve API key prioritizing trusted server-side environment variables.
+    Client-supplied keys are only used if server key is absent or client keys are explicitly enabled.
+    """
+    if SERVER_GROQ_API_KEY:
+        return SERVER_GROQ_API_KEY
+    if ALLOW_CLIENT_API_KEY and client_key and client_key.strip():
+        return client_key.strip()
+    raise HTTPException(
+        status_code=401,
+        detail="Server GROQ_API_KEY is not configured and client-supplied keys are disabled."
+    )
+
+async def verify_admin_access(
+    authorization: Optional[str] = Header(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    """
+    Protect sensitive administrative routes (e.g. reading/modifying/clearing memories).
+    If ADMIN_SECRET_KEY is configured in .env, strict credential verification is enforced.
+    """
+    if ADMIN_SECRET_KEY:
+        token = None
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.split("Bearer ")[1].strip()
+        elif x_admin_key:
+            token = x_admin_key.strip()
+        
+        if not token or token != ADMIN_SECRET_KEY:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized: Valid administrative credentials required."
+            )
+    return True
+
+# -----------------------------------------------------------------------------
+# CORS Middleware
+# -----------------------------------------------------------------------------
+allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "")
+if allowed_origins_env.strip():
+    origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+else:
+    # Standard local development origins
+    origins = [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify React frontend origin
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Initialize managers
+# -----------------------------------------------------------------------------
+# State & Static Storage
+# -----------------------------------------------------------------------------
 memory_db = MemoryManager(filepath="memories.json")
 tts_db = TTSManager(output_dir="static/audio")
 
-# Mount static files to serve audio files
 os.makedirs("static/audio", exist_ok=True)
 
 @app.get("/static/audio/{filename}")
 async def get_audio_file(filename: str):
     file_path = os.path.join("static/audio", filename)
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Audio not found")
+        raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(
         file_path, 
         media_type="audio/mpeg",
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
             "Accept-Ranges": "bytes"
         }
     )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Default system prompt for Shristy
+# -----------------------------------------------------------------------------
+# System Prompts & Safety Guidelines
+# -----------------------------------------------------------------------------
 DEFAULT_SYSTEM_PROMPT = (
     "You are Shristy, Anubhav's close friend and companion. "
     "Talk like a real friend having a chill, casual conversation in real life. "
@@ -61,10 +126,17 @@ DEFAULT_SYSTEM_PROMPT = (
     "- BE REAL & GROUNDED: Be casual, witty, sympathetic, or playful. React like a real human friend sitting next to him."
 )
 
-DEFAULT_PSYCHIATRIST_PROMPT = (
-    "You are Dr. Shristy, a compassionate psychiatric doctor speaking with Anubhav. "
-    "Listen actively and offer concise, caring support in 2-3 sentences max. "
-    "CRITICAL SAFETY NOTE: If self-harm is mentioned, immediately urge professional crisis help (988)."
+DEFAULT_SUPPORT_PROMPT = (
+    "You are Shristy, an empathetic, supportive friend and active listener. "
+    "SAFETY & DISCLAIMER: You are an AI companion, NOT a licensed therapist, psychiatrist, or medical professional. "
+    "Never diagnose medical conditions or prescribe treatments. "
+    "CRITICAL CRISIS GUIDANCE: If the user mentions self-harm, suicide, or crisis, immediately respond with warmth "
+    "and provide appropriate professional crisis resources: "
+    "- US/Canada: Call or text 988 "
+    "- UK: Call 111 or text SHOUT to 85258 "
+    "- India: Call 9152987821 (iCall) or 1800-599-0019 (KIRAN) "
+    "- International: Visit findahelpline.com or befrienders.org "
+    "Keep responses compassionate, direct, and under 3 sentences."
 )
 
 DEFAULT_MENTOR_PROMPT = (
@@ -88,6 +160,9 @@ LANGUAGE_MATCHING_RULE = (
     "Never switch to pure Hindi when the user is speaking English."
 )
 
+# -----------------------------------------------------------------------------
+# Data Models
+# -----------------------------------------------------------------------------
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -105,22 +180,23 @@ class ChatResponse(BaseModel):
     audioUrl: Optional[str] = None
     memoriesUsed: List[str] = []
 
-MODEL_NAME = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+class AddMemoryRequest(BaseModel):
+    fact: str
+    category: Optional[str] = "general"
+    confidence: Optional[float] = 1.0
 
+# Model configurations
+MODEL_NAME = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 FALLBACK_MODELS = [
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
-    "qwen/qwen3.6-27b",
-    "allam-2-7b",
-    "groq/compound-mini",
-    "groq/compound",
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
+    "qwen/qwen3.8-27b",
+    "allam-2-7b",
+    "groq/compound-mini",
 ]
 
 def fetch_available_groq_model(api_key: str) -> str:
-    """Fetch active model IDs from Groq API and pick the best available text chat model."""
+    """Fetch active chat model IDs from Groq API."""
     try:
         res = requests.get(
             "https://api.groq.com/openai/v1/models",
@@ -130,12 +206,10 @@ def fetch_available_groq_model(api_key: str) -> str:
         if res.status_code == 200:
             data = res.json()
             available_ids = [m["id"] for m in data.get("data", [])]
-            # Filter out non-chat models (whisper, audio, prompt-guard, etc.)
             chat_models = [
                 m_id for m_id in available_ids 
                 if not any(x in m_id.lower() for x in ["whisper", "guard", "orpheus"])
             ]
-            print(f"[Groq Available Chat Models]: {chat_models}")
             for pref in FALLBACK_MODELS:
                 if pref in chat_models:
                     return pref
@@ -143,22 +217,30 @@ def fetch_available_groq_model(api_key: str) -> str:
                 return chat_models[0]
     except Exception as e:
         print(f"Failed to fetch model list from Groq: {e}")
-    return "groq/compound-mini"
+    return "llama-3.3-70b-versatile"
 
+# -----------------------------------------------------------------------------
+# Structured Memory Extraction
+# -----------------------------------------------------------------------------
 def extract_new_memories(user_msg: str, bot_msg: str, api_key: str):
-    """Background task to extract facts about the user and save them in memories."""
+    """
+    Background task to reliably extract structured personal facts using JSON schema output.
+    Filters out temporary states and enforces confidence validation.
+    """
     if not api_key:
         return
     
     prompt = (
-        f"Review this conversation exchange:\n"
+        f"Analyze this conversation exchange:\n"
         f"User: {user_msg}\n"
-        f"Shristy: {bot_msg}\n\n"
-        f"Identify any personal facts, preferences, or details the user mentioned about themselves "
-        f"(e.g., their name, favorite programming languages, hobbies, job, routines, habits). "
-        f"Format the output as a list of simple, single-sentence declarations (e.g., 'The user is a software engineer', "
-        f"'The user likes python'). Output ONLY the facts, one per line. If no new facts are mentioned, "
-        f"output 'NONE'. Do not include explanation or numbers."
+        f"Companion: {bot_msg}\n\n"
+        f"Extract lasting personal facts, persistent preferences, hobbies, or identity details about the user.\n"
+        f"Do NOT extract fleeting temporary states (e.g., 'The user is eating dinner right now').\n"
+        f"Respond in JSON format with a 'facts' array of objects:\n"
+        f"[\n"
+        f"  {{\"fact\": \"declaration\", \"category\": \"preference|profile|goal|routine\", \"is_lasting\": true, \"confidence\": 0.9}}\n"
+        f"]\n"
+        f"If no lasting facts are mentioned, return {{\"facts\": []}}."
     )
     
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -170,48 +252,47 @@ def extract_new_memories(user_msg: str, bot_msg: str, api_key: str):
     payload = {
         "model": MODEL_NAME,
         "messages": [
-            {"role": "system", "content": "You extract personal user facts from dialogues."},
+            {"role": "system", "content": "You extract durable user profile facts. Output strictly valid JSON."},
             {"role": "user", "content": prompt}
         ],
+        "response_format": {"type": "json_object"},
         "temperature": 0.1
     }
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
         if response.status_code != 200:
-            fallback_model = fetch_available_groq_model(api_key)
-            if fallback_model and fallback_model != payload["model"]:
-                payload["model"] = fallback_model
+            fallback = fetch_available_groq_model(api_key)
+            if fallback and fallback != payload["model"]:
+                payload["model"] = fallback
                 response = requests.post(url, json=payload, headers=headers, timeout=15)
 
         if response.status_code == 200:
             result = response.json()
-            extracted_text = result["choices"][0]["message"]["content"].strip()
-            if extracted_text and "NONE" not in extracted_text.upper():
-                lines = extracted_text.split("\n")
-                for line in lines:
-                    fact = line.strip().strip("-").strip("*").strip()
-                    if fact and len(fact) > 5:
-                        memory_db.add_memory(fact)
-                        print(f"[Memory Extracted] {fact}")
+            raw_json = result["choices"][0]["message"]["content"].strip()
+            data = json.loads(raw_json)
+            facts_list = data.get("facts", [])
+            for item in facts_list:
+                if isinstance(item, dict):
+                    fact_str = item.get("fact", "").strip()
+                    is_lasting = item.get("is_lasting", True)
+                    conf = float(item.get("confidence", 1.0))
+                    category = item.get("category", "general")
+                    
+                    # Validate: durable facts with confidence threshold >= 0.70
+                    if fact_str and is_lasting and conf >= 0.70:
+                        memory_db.add_memory(fact_str, category=category, confidence=conf)
+                        print(f"[Memory Stored] ({category}, {conf}): {fact_str}")
     except Exception as e:
-        print(f"Error extracting memories: {e}")
+        print(f"Error during structured memory extraction: {e}")
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
-    # Retrieve API key in order of priority: request payload > environment variables
-    api_key = req.apiKey if req.apiKey else os.environ.get("GROQ_API_KEY")
+# -----------------------------------------------------------------------------
+# Chat Endpoints
+# -----------------------------------------------------------------------------
+def build_prompt(req: ChatRequest) -> tuple[List[Dict[str, str]], List[str]]:
+    """Helper to build context, memories, and message payload."""
+    relevant_facts = memory_db.get_contextual_memories(req.message, limit=8)
     
-    if not api_key:
-        raise HTTPException(
-            status_code=401, 
-            detail="Groq API Key missing. Provide it in backend/.env or in settings panel."
-        )
-
-    # 1. Fetch comprehensive contextual memories (core profile + recent interaction history + query matches)
-    relevant_facts = memory_db.get_contextual_memories(req.message, limit=12)
-    
-    # 2. Construct injected memory prompt
     memory_injection = ""
     if relevant_facts:
         memory_injection = (
@@ -220,15 +301,15 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
             + "\nCRITICAL: Keep this strictly as background context. Never recite these facts or use them to give motivational speeches."
         )
 
-    # 3. Compile prompt
     if req.customPrompt:
         system_prompt = req.customPrompt
-    elif req.persona == "psychiatrist":
-        system_prompt = DEFAULT_PSYCHIATRIST_PROMPT
+    elif req.persona in ("psychiatrist", "support"):
+        system_prompt = DEFAULT_SUPPORT_PROMPT
     elif req.persona == "mentor":
         system_prompt = DEFAULT_MENTOR_PROMPT
     else:
         system_prompt = DEFAULT_SYSTEM_PROMPT
+
     full_system_prompt = (
         system_prompt 
         + memory_injection 
@@ -236,23 +317,28 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         + LANGUAGE_MATCHING_RULE
     )
 
-    # 4. Prepare chat messages history for the LLM
     messages = [{"role": "system", "content": full_system_prompt}]
-    
-    # Add conversation history
-    for msg in req.history[-15:]:  # Keep last 15 messages for context
+    for msg in req.history[-15:]:
         messages.append({"role": msg.role, "content": msg.content})
-        
-    # Add current user message
     messages.append({"role": "user", "content": req.message})
 
-    # 5. Call LLM (Groq)
+    return messages, relevant_facts
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
+    """
+    Unified chat endpoint returning the complete text response and synthesized TTS audio URL
+    optimized for synchronized Live2D avatar lip-sync animation.
+    """
+    api_key = resolve_groq_api_key(req.apiKey)
+    messages, relevant_facts = build_prompt(req)
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
     payload = {
         "model": MODEL_NAME,
         "messages": messages,
@@ -262,35 +348,29 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
 
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=15)
-        
-        # If any error response from Groq, fetch active models for this key and retry automatically
         if response.status_code != 200:
-            print(f"[Groq LLM Warning {response.status_code}]: {response.text}")
-            fallback_model = fetch_available_groq_model(api_key)
-            if fallback_model and fallback_model != payload["model"]:
-                print(f"[Auto Fallback Model] Retrying request with model: {fallback_model}")
-                payload["model"] = fallback_model
+            fallback = fetch_available_groq_model(api_key)
+            if fallback and fallback != payload["model"]:
+                payload["model"] = fallback
                 response = requests.post(url, json=payload, headers=headers, timeout=15)
 
         if response.status_code != 200:
-            error_detail = response.json().get("error", {}).get("message", "Unknown error from Groq")
-            raise HTTPException(status_code=response.status_code, detail=f"LLM API Error: {error_detail}")
+            err = response.json().get("error", {}).get("message", "Unknown error from Groq")
+            raise HTTPException(status_code=response.status_code, detail=f"LLM API Error: {err}")
         
-        result = response.json()
-        reply_text = result["choices"][0]["message"]["content"].strip()
+        reply_text = response.json()["choices"][0]["message"]["content"].strip()
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Failed to reach LLM API: {str(e)}")
 
-    # 6. Generate TTS audio in the background (or synchronously so we can return the audio file immediately)
+    # Generate Edge-TTS audio file for avatar lip-sync
     audio_url = None
     try:
         audio_filename = await tts_db.generate_speech(reply_text, voice=req.voice)
         audio_url = f"/static/audio/{audio_filename}"
     except Exception as e:
-        print(f"Error generating text-to-speech: {e}")
-        # Not throwing HTTP exception because we still want to return the text reply even if voice fails
+        print(f"Text-to-speech generation notice: {e}")
 
-    # 7. Add memory extraction task in background to keep CPU responsive
+    # Enqueue background memory extraction
     background_tasks.add_task(extract_new_memories, req.message, reply_text, api_key)
 
     return ChatResponse(
@@ -299,32 +379,71 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
         memoriesUsed=relevant_facts
     )
 
+
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint delivering tokens in real time from Groq.
+    """
+    api_key = resolve_groq_api_key(req.apiKey)
+    messages, _ = build_prompt(req)
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 150,
+        "stream": True
+    }
+
+    def generate_tokens():
+        try:
+            with requests.post(url, json=payload, headers=headers, stream=True, timeout=20) as stream_res:
+                for line in stream_res.iter_lines():
+                    if not line:
+                        continue
+                    line_str = line.decode("utf-8")
+                    if line_str.startswith("data: "):
+                        data_content = line_str[6:].strip()
+                        if data_content == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            break
+                        try:
+                            chunk = json.loads(data_content)
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                yield f"data: {json.dumps({'token': delta})}\n\n"
+                        except Exception:
+                            continue
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(generate_tokens(), media_type="text/event-stream")
+
+# -----------------------------------------------------------------------------
+# Voice & Audio Endpoints
+# -----------------------------------------------------------------------------
 @app.post("/api/transcribe")
 async def transcribe_endpoint(
     file: UploadFile = File(...), 
     apiKey: Optional[str] = Form(None),
     language: Optional[str] = Form(None)
 ):
-    api_key = apiKey if apiKey else os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=401, detail="Groq API Key missing. Provide it in settings panel.")
-    
+    api_key = resolve_groq_api_key(apiKey)
     audio_content = await file.read()
     filename = file.filename or "recording.webm"
     content_type = file.content_type or "audio/webm"
     
-    files = {
-        "file": (filename, audio_content, content_type)
-    }
-    data = {
-        "model": "whisper-large-v3-turbo",
-        "response_format": "json"
-    }
+    files = {"file": (filename, audio_content, content_type)}
+    data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
     if language and language not in ["auto", ""]:
         data["language"] = language
-    headers = {
-        "Authorization": f"Bearer {api_key}"
-    }
+    headers = {"Authorization": f"Bearer {api_key}"}
     
     try:
         response = requests.post(
@@ -335,7 +454,6 @@ async def transcribe_endpoint(
             timeout=25
         )
         if response.status_code != 200:
-            # Fallback to whisper-large-v3 if turbo not accessible
             data["model"] = "whisper-large-v3"
             response = requests.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
@@ -346,15 +464,12 @@ async def transcribe_endpoint(
             )
             
         if response.status_code == 200:
-            result = response.json()
-            transcript_text = result.get("text", "").strip()
-            print(f"[Whisper Transcribed]: {transcript_text}")
-            return {"text": transcript_text}
+            return {"text": response.json().get("text", "").strip()}
         else:
             err = response.json().get("error", {}).get("message", "Speech transcription failed")
             raise HTTPException(status_code=response.status_code, detail=err)
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Failed to reach Groq transcription API: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reach transcription API: {str(e)}")
 
 @app.get("/api/voices")
 async def voices_endpoint():
@@ -363,30 +478,50 @@ async def voices_endpoint():
 
 @app.post("/api/settings/verify")
 async def verify_settings(req: dict):
-    api_key = req.get("apiKey") if req.get("apiKey") else os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return {"status": "error", "message": "API key missing"}
-        
+    try:
+        api_key = resolve_groq_api_key(req.get("apiKey"))
+    except HTTPException:
+        return {"status": "error", "message": "API key missing or disabled"}
+
     url = "https://api.groq.com/openai/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
-            return {"status": "ok", "message": "API Key is valid"}
-        else:
-            return {"status": "error", "message": f"Invalid API key (Status code: {res.status_code})"}
+            return {"status": "ok", "message": "Groq API Key verified successfully"}
+        return {"status": "error", "message": f"Invalid API key (status: {res.status_code})"}
     except Exception as e:
         return {"status": "error", "message": f"Connection check failed: {str(e)}"}
 
-@app.get("/api/memory")
+# -----------------------------------------------------------------------------
+# Protected Memory Management Endpoints
+# -----------------------------------------------------------------------------
+@app.get("/api/memory", dependencies=[Depends(verify_admin_access)])
 async def get_memories_endpoint():
-    return {"memories": memory_db.memories}
+    """Retrieve all structured memories (requires admin authentication if configured)."""
+    return {"memories": memory_db.get_all_memories()}
 
-@app.post("/api/memory/clear")
+@app.post("/api/memory", dependencies=[Depends(verify_admin_access)])
+async def add_memory_endpoint(req: AddMemoryRequest):
+    """Manually add a memory item with category and confidence."""
+    created = memory_db.add_memory(req.fact, category=req.category or "general", confidence=req.confidence or 1.0)
+    if not created:
+        return {"status": "skipped", "message": "Memory already exists or is invalid"}
+    return {"status": "ok", "memory": created}
+
+@app.delete("/api/memory/{memory_id}", dependencies=[Depends(verify_admin_access)])
+async def delete_memory_endpoint(memory_id: str):
+    """Delete an individual memory by ID or exact text."""
+    deleted = memory_db.delete_memory(memory_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory item not found")
+    return {"status": "ok", "message": "Memory deleted successfully"}
+
+@app.post("/api/memory/clear", dependencies=[Depends(verify_admin_access)])
 async def clear_memories_endpoint():
-    memory_db.memories = []
-    memory_db.save_memories()
-    return {"status": "ok", "message": "Memories cleared"}
+    """Clear all memories (requires admin authentication if configured)."""
+    memory_db.clear_memories()
+    return {"status": "ok", "message": "All memories cleared successfully"}
 
 if __name__ == "__main__":
     import uvicorn

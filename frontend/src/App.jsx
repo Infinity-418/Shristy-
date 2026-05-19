@@ -143,6 +143,17 @@ export default function App() {
     }
   };
 
+  const deleteMemory = async (memId) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/memory/${encodeURIComponent(memId)}`, { method: "DELETE" });
+      if (response.ok) {
+        setMemories(prev => prev.filter(m => (typeof m === 'object' ? m.id !== memId && m.text !== memId : m !== memId)));
+      }
+    } catch (err) {
+      console.error("Failed to delete memory:", err);
+    }
+  };
+
   const selectedVoiceObj = voices.find(v => v.ShortName === selectedVoice);
   const selectedLocale = selectedVoiceObj ? selectedVoiceObj.Locale : "en-US";
 
@@ -588,7 +599,7 @@ export default function App() {
               title="Change Companion Persona"
             >
               <option value="companion">❤️ Companion Mode</option>
-              <option value="psychiatrist">🩺 Psychiatrist Mode</option>
+              <option value="psychiatrist">🩺 Emotional Support Mode</option>
               <option value="mentor">💻 Coding/ML Mentor</option>
             </select>
           </div>
@@ -830,11 +841,48 @@ export default function App() {
                   {memories.length === 0 ? (
                     <div className="help-text" style={{ padding: "6px" }}>Shristy has no memories stored yet. Talk to her to create some!</div>
                   ) : (
-                    memories.map((m, idx) => (
-                      <div key={idx} className="memory-item">
-                        <span>{m}</span>
-                      </div>
-                    ))
+                    memories.map((m, idx) => {
+                      const text = typeof m === "object" ? (m.text || m.fact) : m;
+                      const id = typeof m === "object" ? m.id : m;
+                      const category = typeof m === "object" && m.category ? m.category : null;
+                      return (
+                        <div key={id || idx} className="memory-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ flex: 1, paddingRight: "8px" }}>
+                            {category && (
+                              <span style={{ 
+                                fontSize: "10px", 
+                                textTransform: "uppercase", 
+                                letterSpacing: "0.5px",
+                                padding: "2px 6px", 
+                                borderRadius: "4px", 
+                                background: "rgba(255, 255, 255, 0.12)", 
+                                marginRight: "6px",
+                                color: "#a5b4fc"
+                              }}>
+                                {category}
+                              </span>
+                            )}
+                            {text}
+                          </span>
+                          <button 
+                            type="button" 
+                            onClick={() => deleteMemory(id)}
+                            style={{ 
+                              background: "transparent", 
+                              border: "none", 
+                              color: "#ff5252", 
+                              cursor: "pointer", 
+                              fontSize: "16px",
+                              padding: "0 4px",
+                              lineHeight: "1"
+                            }}
+                            title="Delete this memory"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
                 {memories.length > 0 && (
