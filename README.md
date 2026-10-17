@@ -11,25 +11,25 @@ An intelligent, expressive AI companion chatbot featuring an interactive **Live2
 
 ---
 
-## ✨ Features
+##  Features
 
-- **🎭 Interactive Live2D Avatar**: Fully animated anime companion powered by PixiJS and Live2D Cubism SDK with natural idle animations and physics.
-- **🎙️ Real-time Audio-Reactive Lip-Sync**: Uses the Web Audio API to analyze output speech frequencies in real time, driving realistic avatar mouth movements.
-- **⚡ Ultra-Fast Streaming**: Powered by Groq LLMs (Llama 3, Qwen, Mixtral) for lightning-fast sub-second response times.
-- **🧠 Continuous Memory Architecture**:
+- ** Interactive Live2D Avatar**: Fully animated anime companion powered by PixiJS and Live2D Cubism SDK with natural idle animations and physics.
+- ** Real-time Audio-Reactive Lip-Sync**: Uses the Web Audio API to analyze output speech frequencies in real time, driving realistic avatar mouth movements.
+- ** Ultra-Fast Streaming**: Powered by Groq LLMs (Llama 3, Qwen, Mixtral) for lightning-fast sub-second response times.
+- ** Continuous Memory Architecture**:
   - Automatically extracts and indexes personal facts, preferences, and details from conversations in the background.
   - Contextual retrieval using TF-IDF similarity to recall relevant memories without awkward robotic recitations.
-- **🗣️ Full Voice Pipeline**:
+- ** Full Voice Pipeline**:
   - **Speech-to-Text**: Fast voice input via Groq Whisper (`whisper-large-v3-turbo`).
   - **Text-to-Speech**: High-fidelity natural voice synthesis via Edge-TTS with multi-voice selection.
-- **🎭 Multi-Persona Modes**:
+- ** Multi-Persona Modes**:
   - **Companion**: Warm, witty, casual friend who keeps chats grounded and brief without cheesy motivational clichés.
   - **Psychiatrist**: Compassionate, active-listening support with built-in safety boundaries.
   - **Mentor**: Direct, technical coding and machine learning assistance.
 
 ---
 
-## 🛠️ Architecture
+##  Architecture
 
 ```
 chatbot/
@@ -58,7 +58,7 @@ chatbot/
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -129,6 +129,4 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
