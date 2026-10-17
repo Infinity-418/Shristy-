@@ -3,4 +3,4 @@ uvicorn
 edge-tts
 python-multipart
 python-dotenv
-requests
+httpx
